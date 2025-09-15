@@ -1,6 +1,8 @@
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 
 # --- Section 1: Data Loading ---
@@ -154,6 +156,16 @@ if df_facebook is not None and not df_facebook.empty:
     st.title("🚀 Marketing Intelligence Dashboard")
     st.markdown("A unified view of our marketing efforts and their business impact, now with interactive filters.")
 
+    # Custom CSS for chart styling
+    st.markdown("""
+        <style>
+        .st-emotion-cache-121bd9p {
+            border-right: 1px solid #ddd;
+            padding-right: 10px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
     # --- Sidebar Visibility Toggle ---
     if 'show_sidebar' not in st.session_state:
         st.session_state.show_sidebar = True
@@ -169,7 +181,7 @@ if df_facebook is not None and not df_facebook.empty:
         with st.sidebar:
             st.header("Filter Options")
             
-            # --- Organize and space out the filters ---
+            # --- Arrange filters in a column view ---
             st.subheader("Date Range")
             start_date = pd.to_datetime(master_df['date']).min()
             end_date = pd.to_datetime(master_df['date']).max()
@@ -257,6 +269,35 @@ if df_facebook is not None and not df_facebook.empty:
     # Performance Trends (Row-wise Layout)
     st.subheader("Performance Trends")
 
+    # Dual-Axis Line Graph for Revenue and Spend
+    if not filtered_df.empty:
+        daily_revenue_spend = filtered_df.groupby('date').agg(
+            total_revenue=('total_revenue', 'sum'),
+            total_spend=('spend', 'sum')
+        ).reset_index()
+
+        fig_dual_axis = make_subplots(specs=[[{"secondary_y": True}]])
+        
+        fig_dual_axis.add_trace(
+            go.Scatter(x=daily_revenue_spend['date'], y=daily_revenue_spend['total_revenue'], name="Total Revenue"),
+            secondary_y=False,
+        )
+        fig_dual_axis.add_trace(
+            go.Scatter(x=daily_revenue_spend['date'], y=daily_revenue_spend['total_spend'], name="Total Spend"),
+            secondary_y=True,
+        )
+
+        fig_dual_axis.update_layout(
+            title_text="Daily Total Revenue vs. Total Ad Spend",
+            hovermode="x unified",
+            template="plotly_white",
+        )
+        fig_dual_axis.update_xaxes(title_text="Date")
+        fig_dual_axis.update_yaxes(title_text="Total Revenue ($)", secondary_y=False)
+        fig_dual_axis.update_yaxes(title_text="Total Spend ($)", secondary_y=True)
+
+        st.plotly_chart(fig_dual_axis, use_container_width=True)
+
     # Daily Business Performance Chart
     if not daily_business_performance_filtered.empty:
         daily_business_performance_melted = daily_business_performance_filtered.melt(
@@ -275,26 +316,42 @@ if df_facebook is not None and not df_facebook.empty:
             template="plotly_white",
             color_discrete_sequence=px.colors.qualitative.Plotly
         )
-        fig_business_trend.update_layout(legend_title="Metric", hovermode="x unified")
+        fig_business_trend.update_layout(
+            legend_title="Metric", 
+            hovermode="x unified",
+        )
         st.plotly_chart(fig_business_trend, use_container_width=True)
 
-    # Total Revenue vs. Total Spend Scatter Plot
+    st.markdown("---")
+
+    # Marketing Funnel
+    st.subheader("Marketing Funnel")
     if not filtered_df.empty:
-        daily_revenue_spend = filtered_df.groupby('date').agg(
-            total_revenue=('total_revenue', 'sum'),
-            total_spend=('spend', 'sum')
-        ).reset_index()
-        fig_scatter = px.scatter(
-            daily_revenue_spend,
-            x="total_spend",
-            y="total_revenue",
-            size="total_revenue",
-            title="Daily Total Revenue vs. Total Ad Spend",
-            labels={'total_spend': 'Total Ad Spend ($)', 'total_revenue': 'Total Revenue ($)'},
-            hover_data=['date'],
-            template="plotly_white"
+        funnel_data = {
+            'stage': ['Impressions', 'Clicks', 'Orders', 'Attributed Revenue'],
+            'value': [
+                filtered_df['impression'].sum(),
+                filtered_df['clicks'].sum(),
+                filtered_df['orders'].sum(),
+                filtered_df['attributed_revenue'].sum()
+            ]
+        }
+        funnel_df = pd.DataFrame(funnel_data)
+        
+        fig_funnel = go.Figure(go.Funnel(
+            y=funnel_df['stage'],
+            x=funnel_df['value'],
+            marker = {"color": ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]},
+            textposition="outside",
+            textinfo="value+percent initial",
+            textfont=dict(size=18),
+            connector={"line": {"color": "rgb(125, 125, 125)", "dash": "solid", "width": 2}},
+        ))
+        fig_funnel.update_layout(
+            title_text="Marketing Conversion Funnel",
+            template="plotly_white",
         )
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        st.plotly_chart(fig_funnel, use_container_width=True)
 
     st.markdown("---")
 
@@ -313,35 +370,70 @@ if df_facebook is not None and not df_facebook.empty:
                 platform_summary,
                 x='platform',
                 y=['total_spend', 'total_attributed_revenue'],
+                color='platform',
                 title="Total Spend vs. Attributed Revenue by Platform",
                 labels={'value': 'Amount ($)', 'platform': 'Marketing Platform', 'variable': 'Metric'},
                 barmode='group',
-                template="plotly_white",
-                color_discrete_sequence=['#4B4B4B', '#0072B2']
+                text_auto=True,
+                template="plotly_white"
             )
+            fig_platform.update_traces(textposition='inside')
             st.plotly_chart(fig_platform, use_container_width=True)
     with chart_col4:
-        # ROAS by Marketing Platform Bar Chart
+        # ROAS by Marketing Platform Trend Chart
         if not daily_marketing_performance_filtered.empty:
-            platform_roas_summary = daily_marketing_performance_filtered.groupby('platform').agg(
-                total_spend=('total_spend', 'sum'),
-                total_attributed_revenue=('total_attributed_revenue', 'sum')
-            ).reset_index()
-            platform_roas_summary['roas'] = platform_roas_summary.apply(
+            platform_roas_trend = daily_marketing_performance_filtered.copy()
+            platform_roas_trend['roas'] = platform_roas_trend.apply(
                 lambda x: x['total_attributed_revenue'] / x['total_spend'] if x['total_spend'] > 0 else 0,
                 axis=1
             )
-            fig_roas = px.bar(
-                platform_roas_summary.sort_values('roas', ascending=False),
-                x='platform',
+            fig_roas = px.line(
+                platform_roas_trend,
+                x='date',
                 y='roas',
-                title="ROAS by Marketing Platform",
-                labels={'roas': 'ROAS', 'platform': 'Marketing Platform'},
-                text_auto=True,
+                color='platform',
+                title="Daily ROAS by Marketing Platform",
+                labels={'roas': 'ROAS', 'date': 'Date', 'platform': 'Marketing Platform'},
                 template="plotly_white",
-                color_discrete_sequence=px.colors.qualitative.Plotly
+            )
+            fig_roas.update_layout(
+                legend_title="Platform",
             )
             st.plotly_chart(fig_roas, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # New section for Seasonal Performance
+    st.subheader("Seasonal Performance")
+    if not filtered_df.empty:
+        # Aggregate data by month for seasonal analysis
+        filtered_df['month'] = filtered_df['date'].dt.to_period('M')
+        monthly_performance = filtered_df.groupby(['month', 'platform']).agg(
+            monthly_attributed_revenue=('attributed_revenue', 'sum'),
+            monthly_spend=('spend', 'sum')
+        ).reset_index()
+        
+        # Calculate monthly ROAS
+        monthly_performance['monthly_roas'] = monthly_performance.apply(
+            lambda x: x['monthly_attributed_revenue'] / x['monthly_spend'] if x['monthly_spend'] > 0 else 0,
+            axis=1
+        )
+        
+        # Convert month back to a string for plotting
+        monthly_performance['month'] = monthly_performance['month'].astype(str)
+        
+        # Create the seasonal ROAS trend graph
+        fig_seasonal_roas = px.line(
+            monthly_performance,
+            x='month',
+            y='monthly_roas',
+            color='platform',
+            title='Monthly ROAS Trend by Platform',
+            labels={'monthly_roas': 'ROAS', 'month': 'Month', 'platform': 'Marketing Platform'},
+            template="plotly_white"
+        )
+        fig_seasonal_roas.update_layout(legend_title="Platform")
+        st.plotly_chart(fig_seasonal_roas, use_container_width=True)
 
     st.markdown("---")
 
@@ -359,11 +451,12 @@ if df_facebook is not None and not df_facebook.empty:
                 revenue_by_platform,
                 names='platform',
                 values='total_attributed_revenue',
+                color='platform',
                 title='Attributed Revenue by Platform',
                 hole=0.4,
                 template="plotly_white",
-                color_discrete_sequence=px.colors.qualitative.Plotly
             )
+            fig_pie.update_traces(textposition='inside')
             st.plotly_chart(fig_pie, use_container_width=True)
     
     with chart_col6:
@@ -406,6 +499,7 @@ if df_facebook is not None and not df_facebook.empty:
                 template="plotly_white",
                 color_discrete_sequence=px.colors.qualitative.Plotly
             )
+            fig_revenue_state.update_traces(textposition='inside')
             st.plotly_chart(fig_revenue_state, use_container_width=True)
         else:
             st.warning("The 'state' column is not available in the dataset for this chart.")
@@ -424,12 +518,13 @@ if df_facebook is not None and not df_facebook.empty:
                 cac_df.sort_values('cac', ascending=False),
                 x='platform',
                 y='cac',
+                color='platform',
                 title="Customer Acquisition Cost (CAC) by Platform",
                 labels={'cac': 'CAC ($)', 'platform': 'Marketing Platform'},
                 text_auto=".2s",
                 template="plotly_white",
-                color_discrete_sequence=px.colors.qualitative.Plotly
             )
+            fig_cac.update_traces(textposition='inside')
             st.plotly_chart(fig_cac, use_container_width=True)
 
     st.markdown("---")
